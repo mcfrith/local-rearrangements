@@ -9,7 +9,8 @@ that are encompassed by one read.
 An example is shown on the right.  The top panel shows an alignment
 (diagonal line) between an 8.1 kb chunk of human chromosome 5, and
 chimp (panTro5) chromosome 5.  The lower panels show alignments of
-three human DNA reads.
+three human DNA reads.  Each read base is aligned to at most one
+genome base (this is guaranteed by `last-split`).
 
 The DNA reads come randomly from either DNA strand: here, readA is
 from the opposite strand to readB and readC.
@@ -48,7 +49,18 @@ local rearrangement in this region.
 
 [BED3]: https://genome.ucsc.edu/FAQ/FAQformat.html#format1
 
-The output ends with the alignments of the rearranged reads.
+Next, the output has the alignments of the rearranged reads.
+
+Finally, rearrangement counts are shown on the screen:
+
+    # Rearrangements: 1383
+    # Query sequences:  1   Rearrangements: 1258
+    # Query sequences:  2   Rearrangements: 20
+    # Query sequences:  3   Rearrangements: 13
+    ...
+
+This means there are 1383 rearranged regions, of which 1258 have just
+one DNA read, 20 have two DNA reads, etc.
 
 ## Recommended usage
 
@@ -87,7 +99,14 @@ First, let's extract all reads, whether rearranged or not, that are
 near rearrangements (so these reads might be rearranged if we align
 them more carefully):
 
-    local-rearrangements --rearrangements out.maf myseq.maf > out2.maf
+    local-rearrangements --rearrangements out.maf --min-queries=2 myseq.maf > out2.maf
+
+Here, we only consider rearrangements with at least two reads
+(`--min-queries=2`).  In some datasets, it seems that: *many* reads
+are rearranged due to (non-alignment) artifacts, and rearrangements
+with at least two (or three) reads are more likely to be real.  By
+omitting numerous artifactual cases, we can afford to re-align more
+slowly-and-sensitively.
 
 Next, get the FASTA sequences of these reads:
 
@@ -137,6 +156,9 @@ and confusing.
   then you probably don't need this.  `FILE` should contain gap
   locations in agp or gap.txt format.
 
+- `--min-queries=N`: only consider rearrangements with >= N query
+  sequences.
+
 - `--outgroup=FILE`: read outgroup alignments in maf or lastTab
   format.  Output each rearrangement only if it is covered by a
   non-rearranged outgroup alignment.
@@ -175,7 +197,8 @@ which has many of the same options.
 
 - `-o FILE`:    read outgroup alignments in maf or lastTab format.
 
-- `-r COUNT`:   get a random sample of this many rearrangements.
+- `-r COUNT`: get a pseudorandom sample of this many rearrangements.
+  **Useful** when there's a large number of rearrangements.
 
 - `-R FILE`: read repeat annotations from a RepeatMasker .out or
   rmsk.txt file.
