@@ -1,0 +1,148 @@
+#! /bin/sh
+# Copyright 2017 Martin C. Frith
+
+bed=/dev/null
+outgroup=/dev/null
+numOfReads=2+
+rmsk=/dev/null
+s=12
+x=500
+y=2500
+zoomFile=/dev/null
+
+printHelp () {
+    cat <<EOF
+Usage: $0 [options] outputDirectoryName rearrangements
+
+Options:
+  -h, --help  show this help message and exit
+  -a          show all reads at each rearrangement
+  -b FILE     read genome annotations from a BED file
+  -f FILE     TrueType or OpenType font file
+  -g FILE     read gene annotations from a genePred file
+  -n NUM[+]   restrict to cases with this many rearranged reads (default=$numOfReads)
+  -o FILE     read outgroup alignments in maf or lastTab format
+  -r COUNT    get a pseudorandom sample of this many rearrangements
+  -R FILE     read repeat annotations from a RepeatMasker .out or rmsk.txt file
+  -s SIZE     font size (default=$s)
+  -u FILE     read unsequenced gaps from an agp or gap file
+  -U FILE     read outgroup unsequenced gaps from agp or gap file
+  -x WIDTH    maximum width in pixels (default=$x)
+  -y HEIGHT   maximum height in pixels (default=$y)
+  -z FILE     read a file with zoom-out percentages
+EOF
+    exit
+}
+
+while getopts :ab:f:g:n:o:r:R:s:u:U:x:y:z: opt
+do
+    case $opt in
+	a)  isAllReads=1
+	    ;;
+	b)  bed=$OPTARG
+	    ;;
+	f)  fOpt="-f$OPTARG"
+	    ;;
+	g)  geneOpt="--genePred1=$OPTARG"
+	    ;;
+	n)  numOfReads=$OPTARG
+	    ;;
+	o)  outgroup=$OPTARG
+	    ;;
+	r)  sampleSize=$OPTARG
+	    ;;
+	R)  rmsk=$OPTARG
+	    ;;
+	s)  s=$OPTARG
+	    ;;
+	u)  gap1opt="--gap1=$OPTARG"
+	    ;;
+	U)  gap2opt="--gap2=$OPTARG"
+	    ;;
+	x)  x=$OPTARG
+	    ;;
+	y)  y=$OPTARG
+	    ;;
+	z)  zoomFile=$OPTARG
+	    ;;
+	?)  printHelp
+	    ;;
+    esac
+done
+shift $(($OPTIND - 1))
+outDir=$1
+shift || printHelp
+
+case $numOfReads in
+    *+) cond=">= ${numOfReads%+}"
+	;;
+    *)  cond="== $numOfReads"
+	;;
+esac
+
+seqRange () {
+    awk '
+BEGIN {z = 50}
+$1 == chr && $2 == beg {z = $3}
+END {f = int((end - beg) * z / 100); print chr ":" (beg - f) "-" (end + f)}
+' chr=$1 beg=$2 end=$3 $4
+}
+
+mkdir "$outDir" || exit 1
+
+tmp=${TMPDIR:-/tmp}/$$
+trap 'rm -f $tmp.*' EXIT
+
+# Remove prefix of reference sequence name, e.g. hg38.chr7 -> chr7
+awk '/^[0-9]/ || /^s/ && ++s % 2 {sub(/.*\./, "", $2)} 1' "$outgroup" > $tmp.g
+
+# Convert repeats to BED format, to make last-dotplot faster
+awk '{
+if (NF == 17)
+  if ($12 ~ /Low_complexity|Simple_repeat/)
+    print $6, $7, $8, 0, 200
+  else
+    print $6, $7, $8, 0, 100, $10
+else if (NF == 15)
+  if ($11 ~ /Low_complexity|Simple_repeat/)
+    print $5, $6 - 1, $7, 0, 200
+  else
+    print $5, $6 - 1, $7, 0, 100, $9 == "+" ? "+" : "-"
+}' "$rmsk" > $tmp.b
+
+cat "$bed" >> $tmp.b
+
+awk '
+/^# Rearrangement: / && NF - 5 '"$cond"' {print > "'$tmp.x'"} !/^[#p]/
+' "$@" > $tmp.a
+
+touch $tmp.x
+
+cut -d' ' -f3- $tmp.x |
+if test "$sampleSize"
+then
+    python -c "
+import random, sys
+random.seed(6283185307179586)
+for i in random.sample(list(sys.stdin), $sampleSize): sys.stdout.write(i)
+"
+else
+    cat
+fi |
+while read chr beg end names
+do
+    seq1=$(seqRange $chr $beg $end $zoomFile)
+    o=$outDir/$chr-$beg.png
+
+    {
+	cat $tmp.g
+	echo
+
+	awk '
+BEGIN {while (ARGC > 4) a[ARGV[--ARGC]] = 1} $12 in a
+' RS= ORS="\n\n" $tmp.a $names
+
+	test "$isAllReads" && cat $tmp.a
+    } |
+    last-dotplot -x$x -y$y $fOpt -s$s -1$seq1 --trim1 --trim2 --lengths1 --sort2=0 --bed1=$tmp.b $geneOpt $gap1opt $gap2opt - $o
+done

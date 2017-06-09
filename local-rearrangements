@@ -1,0 +1,369 @@
+#! /usr/bin/env python
+# Copyright 2017 Martin C. Frith
+
+import bisect
+import itertools
+import operator
+import optparse
+import signal
+import sys
+
+def myOpen(fileName):  # faster than fileinput
+    if fileName == "-":
+        return sys.stdin
+    return open(fileName)
+
+def fieldsFromMaf(line):
+    _, seqName, start, span, strand, seqLen, _ = line.split()
+    beg = int(start)
+    return seqName, beg, beg + int(span), strand, int(seqLen)
+
+def mafInput(lines):
+    mafLines = []
+    rName = qName = ""
+    for line in lines:
+        if line.isspace():
+            if qName:
+                yield fields
+            mafLines = []
+            rName = qName = ""
+        elif line[0] != "#":
+            mafLines.append(line)
+            if line[0] == "s":
+                if rName:
+                    qName, qBeg, qEnd, qStrand, qSeqLen = fieldsFromMaf(line)
+                    fields = (qName, qBeg, qEnd, qStrand, qSeqLen,
+                              rName, rBeg, rEnd, rStrand, rSeqLen, mafLines)
+                else:
+                    rName, rBeg, rEnd, rStrand, rSeqLen = fieldsFromMaf(line)
+    if qName:
+        yield fields
+
+def rearrangementEnds(alignments, end):
+    for i in alignments:
+        yield max(end, i[6])  # rBeg
+        end = max(end, i[7])  # rEnd
+
+def rearrangementBegs(alignments, beg):
+    for i in reversed(alignments):
+        yield min(beg, i[7])  # rEnd
+        beg = min(beg, i[6])  # rBeg
+
+def rearrangementRanges(opts, alignments, reaBegs, reaEnds, strand):
+    x = None
+    for j, y in enumerate(alignments):
+        if y[3] == strand and reaEnds[j] < reaBegs[j]:
+            if x and (i + 1 < j or opts.tandem and x[7] > y[6]):
+                yield reaBegs[i], reaEnds[j]
+            i = j
+            x = y
+
+def onePassMergedRanges(ranges):
+    oldBeg, oldEnd = ranges[0]
+    for beg, end in ranges[1:]:
+        if beg - oldEnd > 2 * (oldEnd - oldBeg + end - beg):  # xxx ?
+            yield oldBeg, oldEnd
+            oldBeg = beg
+        oldEnd = end
+    yield oldBeg, oldEnd
+
+def allPassMergedRanges(ranges):
+    while True:
+        newRanges = list(onePassMergedRanges(ranges))
+        if len(newRanges) == len(ranges): return ranges
+        ranges = newRanges
+
+def rearrangementsFromOneQuery(opts, alignments):
+    head = alignments[0]
+    rName = head[5]
+    if any(i[5] != rName for i in alignments): return
+    strand = head[3]
+    tail = alignments[-1]
+    if tail[3] != strand: return
+    headBeg = head[6]
+    tailEnd = tail[7]
+    reaEnds = list(rearrangementEnds(alignments, headBeg))
+    if reaEnds[-1] >= tailEnd: return
+    reaBegs = list(rearrangementBegs(alignments, tailEnd))
+    if reaBegs[-1] <= headBeg: return
+    reaBegs.reverse()
+    ranges = list(rearrangementRanges(opts,
+                                      alignments, reaBegs, reaEnds, strand))
+    if not ranges: return
+    alignedLength = sum(i[7] - i[6] for i in alignments)  # xxx ???
+    if tailEnd - headBeg > 2 * alignedLength: return  # xxx ?
+    for beg, end in allPassMergedRanges(ranges):
+        yield rName, beg, end, alignments
+
+def alignmentsPerQuery(args):
+    if not args:
+        args = ["-"]
+    for arg in args:
+        lines = myOpen(arg)
+        for k, v in itertools.groupby(mafInput(lines), operator.itemgetter(0)):
+            yield list(v)
+
+def rearrangementsFromFiles(opts, args):
+    for alignments in alignmentsPerQuery(args):
+        if alignments[0][3] == "-":
+            alignments.reverse()
+        for i in rearrangementsFromOneQuery(opts, alignments):
+            yield i
+
+def isExtraFirstGapField(fields):
+    return fields[4].isdigit()
+
+def readGaps(fileName):
+    for line in myOpen(fileName):
+        fields = line.split()
+        if not fields or fields[0][0] == "#": continue
+        if isExtraFirstGapField(fields): fields = fields[1:]
+        if fields[4] not in "NU": continue
+        seqName = fields[0]
+        end = int(fields[2])
+        beg = end - int(fields[5])  # zero-based coordinate
+        yield seqName, beg, end
+
+def tabAlignmentParts(text):
+    insSize = delSize = 0
+    for block in text.split(","):
+        i = block.find(":")
+        if i < 0:
+            yield insSize, delSize, int(block)
+            insSize = delSize = 0
+        else:
+            j = i + 1
+            delSize += int(block[:i])
+            insSize += int(block[j:])
+
+def mafAlignmentParts(alignedSeq1, alignedSeq2):
+    insSize = delSize = subSize = 0
+    for x, y in itertools.izip(alignedSeq1, alignedSeq2):
+        if x == "-":
+            if subSize:
+                yield insSize, delSize, subSize
+                insSize = delSize = subSize = 0
+            insSize += 1
+        elif y == "-":
+            if subSize:
+                yield insSize, delSize, subSize
+                insSize = delSize = subSize = 0
+            delSize += 1
+        else:
+            subSize += 1
+    if subSize:
+        yield insSize, delSize, subSize
+
+def alignmentRanges(alignmentParts, seqName, beg, maxGap):
+    fixedName = seqName.split(".")[-1]
+    end = beg
+    for insSize, delSize, subSize in alignmentParts:
+        if beg == end or insSize > maxGap or delSize > maxGap:
+            if beg < end: yield fixedName, beg, end
+            beg = end + delSize
+        end += delSize + subSize
+    if beg < end: yield fixedName, beg, end
+
+def readOutgroupAlignments(opts):
+    maxGap = opts.outgroup_max_gap
+    rSeq = ""
+    for line in myOpen(opts.outgroup):
+        if line[0].isdigit():  # lastTab format
+            fields = line.split()
+            seqName = fields[1]
+            beg = int(fields[2])
+            parts = tabAlignmentParts(fields[11])
+            for i in alignmentRanges(parts, seqName, beg, maxGap):
+                yield i
+        elif line[0] == "s":  # MAF format
+            fields = line.split()
+            if not rSeq:
+                seqName = fields[1]
+                beg = int(fields[2])
+                rSeq = fields[6]
+            else:
+                qSeq = fields[6]
+                parts = mafAlignmentParts(rSeq, qSeq)
+                for i in alignmentRanges(parts, seqName, beg, maxGap):
+                    yield i
+                rSeq = ""
+
+def rearrangementRangesFromFile(opts):
+    for line in myOpen(opts.rearrangements):
+        fields = line.split()
+        if fields:
+            if line[0] != "#": return
+            if len(fields) < 5 + opts.min_queries: continue
+            yield fields[2], int(fields[3]), int(fields[4])
+        sys.stdout.write(line)
+
+def rangeSortKey(r):
+    seqName, beg, end = r[:3]
+    return seqName, beg, -end
+
+def uncontained(ranges):
+    oldName = ""
+    for r in sorted(ranges, key=rangeSortKey):
+        seqName, beg, end = r[:3]
+        if seqName == oldName:
+            if end <= maxEnd:
+                continue
+        else:
+            oldName = seqName
+        maxEnd = end
+        yield r
+
+def isOverlap(ranges, seqName, beg, end):
+    q = seqName, beg
+    i = bisect.bisect(ranges, q)
+    if i > 0:
+        n, b, e = ranges[i - 1]
+        if n == seqName and e > beg: return True
+    if i < len(ranges):
+        n, b, e = ranges[i]
+        if n == seqName and b < end: return True
+    return False
+
+def isContained(ranges, seqName, beg, end):
+    q = seqName, beg
+    i = bisect.bisect(ranges, q)
+    if not i: return False
+    n, b, e = ranges[i - 1]
+    return n == seqName and e > end
+
+def isPotentialOverlap(genomeRanges, alignment):
+    qBeg, qEnd, _, qSeqLen, rName, rBeg, rEnd = alignment[1:8]
+    genomePosition = rName, rBeg
+    i = bisect.bisect(genomeRanges, genomePosition)
+    if i > 0:
+        n, b, e = genomeRanges[i - 1]
+        if n == rName and e > rBeg - qBeg:
+            return True
+    if i < len(genomeRanges):
+        n, b, e = genomeRanges[i]
+        if n == rName and b < rEnd - (qSeqLen - qEnd):
+            return True
+    return False
+
+def printMafs(alignments):
+    if alignments[0][3] == "-": alignments = reversed(alignments)
+    for i in alignments:
+        mafLines = i[-1]
+        for i in mafLines:
+            sys.stdout.write(i)
+        sys.stdout.write("\n")
+    sys.stdout.write("\n\n")
+
+def printRearrangement(rName, beg, end, clump):
+    queryNames = " ".join(sorted(set(i[0][0] for i in clump)))
+    out = "# Rearrangement:", rName, str(beg), str(end), queryNames
+    sys.stdout.write(" ".join(out) + "\n")
+
+def rearrangementClumps(rearrangements):
+    oldName = ""
+    for chromosomeName, beg, end, alignments in rearrangements:
+        if chromosomeName > oldName or beg >= maxEnd:
+            if oldName: yield oldName, minBeg, maxEnd, clump
+            clump = []
+            oldName = chromosomeName
+            minBeg = beg
+            maxEnd = end
+        clump.append(alignments)
+        maxEnd = max(maxEnd, end)
+    if oldName: yield oldName, minBeg, maxEnd, clump
+
+def alignmentsPerQuerySortKey(alignmentsForOneQuery):
+    h = alignmentsForOneQuery[0]
+    return h[5], h[6], h[7], h[3], h[0]
+
+def log(opts, *things):
+    if opts.verbose:
+        sys.stderr.write(" ".join(map(str, things)) + "\n")
+
+def getQueriesNearRearrangements(opts, args):
+    # xxx print rearranged queries first?
+    log(opts, "reading rearrangements...")
+    r = list(uncontained(rearrangementRangesFromFile(opts)))
+    log(opts, len(r), "rearrangement ranges")
+    for alignments in alignmentsPerQuery(args):
+        if any(isPotentialOverlap(r, a) for a in alignments):
+            printMafs(alignments)
+
+def getLocalRearrangements(opts, args):
+    if opts.gap:
+        log(opts, "reading unsequenced gaps...")
+        gaps = list(uncontained(readGaps(opts.gap)))
+        log(opts, len(gaps), "gap ranges")
+
+    if opts.outgroup:
+        log(opts, "reading outgroup alignments...")
+        outgroupRecords = list(uncontained(readOutgroupAlignments(opts)))
+        log(opts, len(outgroupRecords), "outgroup ranges")
+
+    log(opts, "reading alignments...")
+    rearrangements = sorted(rearrangementsFromFiles(opts, args))
+    log(opts, len(rearrangements), "initial rearrangements")
+
+    alignmentsOfRearrangedQueries = []
+    queryCounts = []
+
+    for chromosomeName, beg, end, clump in rearrangementClumps(rearrangements):
+        numOfQueries = len(clump)
+        if numOfQueries < opts.min_queries:
+            continue
+        if opts.gap and isOverlap(gaps, chromosomeName, beg, end):
+            continue
+        if opts.outgroup:
+            if not isContained(outgroupRecords, chromosomeName, beg, end):
+                continue
+        printRearrangement(chromosomeName, beg, end, clump)
+        alignmentsOfRearrangedQueries.extend(clump)
+        queryCounts.append(numOfQueries)
+
+    sys.stdout.write("\n")
+
+    alignmentsOfRearrangedQueries.sort(key=alignmentsPerQuerySortKey)
+    oldName = ""
+    for i in alignmentsOfRearrangedQueries:
+        queryName = i[0][0]
+        if queryName == oldName: continue
+        printMafs(i)
+        oldName = queryName
+
+    sys.stderr.write("# Rearrangements: %s\n" % len(queryCounts))
+    for k, v in itertools.groupby(sorted(queryCounts)):
+        t = k, len(list(v))
+        sys.stderr.write("# Query sequences: %2s   Rearrangements: %s\n" % t)
+
+def localRearrangements(opts, args):
+    if opts.rearrangements:
+        getQueriesNearRearrangements(opts, args)
+    else:
+        getLocalRearrangements(opts, args)
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # avoid silly error message
+    usage = "%prog maf-file(s)"
+    descr = "Find sequence rearrangements contained in single query sequences."
+    op = optparse.OptionParser(usage=usage, description=descr)
+    op.add_option("--gap", metavar="FILE",
+                  help="read unsequenced genome gaps from agp or gap file")
+    op.add_option("--min-queries", type="int", default=1, metavar="N",
+                  help="only consider rearrangements with >= N queries "
+                  "(default=%default)")
+    op.add_option("--outgroup", metavar="FILE",
+                  help="read outgroup alignments in maf or lastTab format")
+    op.add_option("--outgroup-max-gap", type="int", default=50, metavar="L",
+                  help=
+                  "max gap length in outgroup alignments (default=%default)")
+    # Maybe 50 is a bit short?  This discards one chr3 rearrangement
+    # that I think is good.  Also: chr7 156594331 156601643:
+    # human-chimp indel >100.
+    op.add_option("--rearrangements", metavar="FILE",
+                  help="get alignments of queries near these rearrangements")
+    op.add_option("--tandem", action="store_true",
+                  help="include simple tandem duplications")
+    op.add_option("-v", "--verbose", action="count",
+                  help="show progress messages")
+    opts, args = op.parse_args()
+    localRearrangements(opts, args)

@@ -197,7 +197,7 @@ which has many of the same options.
 
 - `-o FILE`:    read outgroup alignments in maf or lastTab format.
 
-- `-r COUNT`: get a pseudorandom sample of this many rearrangements.
+- `-r COUNT`: get a (pseudo)random sample of this many rearrangements.
   **Useful** when there's a large number of rearrangements.
 
 - `-R FILE`: read repeat annotations from a RepeatMasker .out or
