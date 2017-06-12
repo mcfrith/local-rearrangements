@@ -213,10 +213,12 @@ which has many of the same options.
 
 - `-y HEIGHT`:  maximum height in pixels.
 
-- `-z FILE`: read a file with zoom-out percentages.  The pictures
-  include left and right flanks of each rearrangement, and by default
-  the flank length is 50% of the rearranged region length.  A zoom
-  file should have lines like this:
+- `-Z PERCENT`: zoom-out percentage.  The pictures include left and
+  right flanks of each rearrangement, and each flank length is
+  `PERCENT`% of the rearranged region length.
+
+- `-z FILE`: read a file with zoom-out percentages.  The file should
+  have lines like this:
 
         chr5 79750308 20
 

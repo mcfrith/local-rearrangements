@@ -8,6 +8,7 @@ rmsk=/dev/null
 s=12
 x=500
 y=2500
+zoomPercent=50
 zoomFile=/dev/null
 
 printHelp () {
@@ -29,12 +30,13 @@ Options:
   -U FILE     read outgroup unsequenced gaps from agp or gap file
   -x WIDTH    maximum width in pixels (default=$x)
   -y HEIGHT   maximum height in pixels (default=$y)
+  -Z PERCENT  zoom-out percentage (default=$zoomPercent)
   -z FILE     read a file with zoom-out percentages
 EOF
     exit
 }
 
-while getopts :ab:f:g:n:o:r:R:s:u:U:x:y:z: opt
+while getopts :ab:f:g:n:o:r:R:s:u:U:x:y:Z:z: opt
 do
     case $opt in
 	a)  isAllReads=1
@@ -63,6 +65,8 @@ do
 	    ;;
 	y)  y=$OPTARG
 	    ;;
+	Z)  zoomPercent=$OPTARG
+	    ;;
 	z)  zoomFile=$OPTARG
 	    ;;
 	?)  printHelp
@@ -82,7 +86,7 @@ esac
 
 seqRange () {
     awk '
-BEGIN {z = 50}
+BEGIN {z = '$zoomPercent'}
 $1 == chr && $2 == beg {z = $3}
 END {f = int((end - beg) * z / 100); print chr ":" (beg - f) "-" (end + f)}
 ' chr=$1 beg=$2 end=$3 $4
