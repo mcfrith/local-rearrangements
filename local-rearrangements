@@ -95,13 +95,16 @@ def rearrangementsFromOneQuery(opts, alignments):
     for beg, end in allPassMergedRanges(ranges):
         yield rName, beg, end, alignments
 
+def alignmentsPerQueryFromLines(lines):
+    for k, v in itertools.groupby(mafInput(lines), operator.itemgetter(0)):
+        yield list(v)
+
 def alignmentsPerQuery(args):
     if not args:
         args = ["-"]
     for arg in args:
         lines = myOpen(arg)
-        for k, v in itertools.groupby(mafInput(lines), operator.itemgetter(0)):
-            yield list(v)
+        for i in alignmentsPerQueryFromLines(lines): yield i
 
 def rearrangementsFromFiles(opts, args):
     for alignments in alignmentsPerQuery(args):
@@ -188,14 +191,15 @@ def readOutgroupAlignments(opts):
                     yield i
                 rSeq = ""
 
-def rearrangementRangesFromFile(opts):
-    for line in myOpen(opts.rearrangements):
+def rearrangementRangesFromFile(opts, seqNames, lines):
+    for line in lines:
         fields = line.split()
         if fields:
-            if line[0] != "#": return
             if len(fields) < 5 + opts.min_queries: continue
             yield fields[2], int(fields[3]), int(fields[4])
+            seqNames.update(fields[5:])
         sys.stdout.write(line)
+        if not fields: break
 
 def rangeSortKey(r):
     seqName, beg, end = r[:3]
@@ -274,20 +278,25 @@ def rearrangementClumps(rearrangements):
 
 def alignmentsPerQuerySortKey(alignmentsForOneQuery):
     h = alignmentsForOneQuery[0]
-    return h[5], h[6], h[7], h[3], h[0]
+    return h[5], h[3], h[6], h[7], h[0]
 
 def log(opts, *things):
     if opts.verbose:
         sys.stderr.write(" ".join(map(str, things)) + "\n")
 
 def getQueriesNearRearrangements(opts, args):
-    # xxx print rearranged queries first?
+    f = myOpen(opts.rearrangements)
     log(opts, "reading rearrangements...")
-    r = list(uncontained(rearrangementRangesFromFile(opts)))
+    seqNames = set()
+    r = list(uncontained(rearrangementRangesFromFile(opts, seqNames, f)))
     log(opts, len(r), "rearrangement ranges")
+    for alignments in alignmentsPerQueryFromLines(f):
+        if alignments[0][0] in seqNames:
+            printMafs(alignments)
     for alignments in alignmentsPerQuery(args):
         if any(isPotentialOverlap(r, a) for a in alignments):
-            printMafs(alignments)
+            if alignments[0][0] not in seqNames:
+                printMafs(alignments)
 
 def getLocalRearrangements(opts, args):
     if opts.gap:
