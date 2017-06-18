@@ -13,6 +13,10 @@ def myOpen(fileName):  # faster than fileinput
         return sys.stdin
     return open(fileName)
 
+def log(opts, *things):
+    if opts.verbose:
+        sys.stderr.write(" ".join(map(str, things)) + "\n")
+
 def fieldsFromMaf(line):
     _, seqName, start, span, strand, seqLen, _ = line.split()
     beg = int(start)
@@ -116,8 +120,10 @@ def rearrangementsFromFiles(opts, args):
 def isExtraFirstGapField(fields):
     return fields[4].isdigit()
 
-def readGaps(fileName):
-    for line in myOpen(fileName):
+def readGaps(opts):
+    if not opts.gap: return
+    log(opts, "reading unsequenced gaps...")
+    for line in myOpen(opts.gap):
         fields = line.split()
         if not fields or fields[0][0] == "#": continue
         if isExtraFirstGapField(fields): fields = fields[1:]
@@ -168,6 +174,8 @@ def alignmentRanges(alignmentParts, seqName, beg, maxGap):
     if beg < end: yield fixedName, beg, end
 
 def readOutgroupAlignments(opts):
+    if not opts.outgroup: return
+    log(opts, "reading outgroup alignments...")
     maxGap = opts.outgroup_max_gap
     rSeq = ""
     for line in myOpen(opts.outgroup):
@@ -191,15 +199,21 @@ def readOutgroupAlignments(opts):
                     yield i
                 rSeq = ""
 
-def rearrangementRangesFromFile(opts, seqNames, lines):
+def rearrangementRangesFromFile(opts, gaps, outgroupRanges, seqNames, lines):
     for line in lines:
         fields = line.split()
-        if fields:
-            if len(fields) < 5 + opts.min_queries: continue
-            yield fields[2], int(fields[3]), int(fields[4])
-            seqNames.update(fields[5:])
-        sys.stdout.write(line)
         if not fields: break
+        if len(fields) < 5 + opts.min_queries: continue
+        chromosomeName = fields[2]
+        beg = int(fields[3])
+        end = int(fields[4])
+        if isOverlap(gaps, chromosomeName, beg, end): continue
+        if opts.outgroup:
+            if not isContained(outgroupRanges, chromosomeName, beg, end):
+                continue
+        yield chromosomeName, beg, end
+        seqNames.update(fields[5:])
+        sys.stdout.write(line)
 
 def rangeSortKey(r):
     seqName, beg, end = r[:3]
@@ -280,16 +294,14 @@ def alignmentsPerQuerySortKey(alignmentsForOneQuery):
     h = alignmentsForOneQuery[0]
     return h[5], h[3], h[6], h[7], h[0]
 
-def log(opts, *things):
-    if opts.verbose:
-        sys.stderr.write(" ".join(map(str, things)) + "\n")
-
-def getQueriesNearRearrangements(opts, args):
+def getQueriesNearRearrangements(opts, args, gaps, outgroupRanges):
     f = myOpen(opts.rearrangements)
     log(opts, "reading rearrangements...")
     seqNames = set()
-    r = list(uncontained(rearrangementRangesFromFile(opts, seqNames, f)))
+    r = rearrangementRangesFromFile(opts, gaps, outgroupRanges, seqNames, f)
+    r = list(uncontained(r))
     log(opts, len(r), "rearrangement ranges")
+    sys.stdout.write("\n")
     for alignments in alignmentsPerQueryFromLines(f):
         if alignments[0][0] in seqNames:
             printMafs(alignments)
@@ -298,17 +310,7 @@ def getQueriesNearRearrangements(opts, args):
             if alignments[0][0] not in seqNames:
                 printMafs(alignments)
 
-def getLocalRearrangements(opts, args):
-    if opts.gap:
-        log(opts, "reading unsequenced gaps...")
-        gaps = list(uncontained(readGaps(opts.gap)))
-        log(opts, len(gaps), "gap ranges")
-
-    if opts.outgroup:
-        log(opts, "reading outgroup alignments...")
-        outgroupRecords = list(uncontained(readOutgroupAlignments(opts)))
-        log(opts, len(outgroupRecords), "outgroup ranges")
-
+def getLocalRearrangements(opts, args, gaps, outgroupRanges):
     log(opts, "reading alignments...")
     rearrangements = sorted(rearrangementsFromFiles(opts, args))
     log(opts, len(rearrangements), "initial rearrangements")
@@ -320,10 +322,10 @@ def getLocalRearrangements(opts, args):
         numOfQueries = len(clump)
         if numOfQueries < opts.min_queries:
             continue
-        if opts.gap and isOverlap(gaps, chromosomeName, beg, end):
+        if isOverlap(gaps, chromosomeName, beg, end):
             continue
         if opts.outgroup:
-            if not isContained(outgroupRecords, chromosomeName, beg, end):
+            if not isContained(outgroupRanges, chromosomeName, beg, end):
                 continue
         printRearrangement(chromosomeName, beg, end, clump)
         alignmentsOfRearrangedQueries.extend(clump)
@@ -345,10 +347,16 @@ def getLocalRearrangements(opts, args):
         sys.stderr.write("# Query sequences: %2s   Rearrangements: %s\n" % t)
 
 def localRearrangements(opts, args):
+    gaps = list(uncontained(readGaps(opts)))
+    log(opts, len(gaps), "gap ranges")
+
+    outgroupRanges = list(uncontained(readOutgroupAlignments(opts)))
+    log(opts, len(outgroupRanges), "outgroup ranges")
+
     if opts.rearrangements:
-        getQueriesNearRearrangements(opts, args)
+        getQueriesNearRearrangements(opts, args, gaps, outgroupRanges)
     else:
-        getLocalRearrangements(opts, args)
+        getLocalRearrangements(opts, args, gaps, outgroupRanges)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # avoid silly error message
