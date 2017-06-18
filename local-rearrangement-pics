@@ -148,5 +148,5 @@ BEGIN {while (ARGC > 4) a[ARGV[--ARGC]] = 1} $12 in a
 
 	test "$isAllReads" && cat $tmp.a
     } |
-    last-dotplot -x$x -y$y $fOpt -s$s -1$seq1 --trim1 --trim2 --lengths1 --sort2=0 --bed1=$tmp.b $geneOpt $gap1opt $gap2opt - $o
+    last-dotplot -v -x$x -y$y $fOpt -s$s -1$seq1 --trim2 --lengths1 --sort2=0 --bed1=$tmp.b $geneOpt $gap1opt $gap2opt - $o
 done
