@@ -274,9 +274,9 @@ def printMafs(alignments):
         sys.stdout.write("\n")
     sys.stdout.write("\n\n")
 
-def printRearrangement(rName, beg, end, clump):
-    queryNames = " ".join(sorted(set(i[0][0] for i in clump)))
-    out = "# Rearrangement:", rName, str(beg), str(end), queryNames
+def printRearrangement(rName, beg, end, queryNames):
+    q = " ".join(sorted(queryNames))
+    out = "# Rearrangement:", rName, str(beg), str(end), q
     sys.stdout.write(" ".join(out) + "\n")
 
 def rearrangementClumps(rearrangements):
@@ -321,7 +321,8 @@ def getLocalRearrangements(opts, args, gaps, outgroupRanges):
     queryCounts = []
 
     for chromosomeName, beg, end, clump in rearrangementClumps(rearrangements):
-        numOfQueries = len(clump)
+        queryNames = set(i[0][0] for i in clump)
+        numOfQueries = len(queryNames)
         if numOfQueries < opts.min_queries:
             continue
         if isOverlap(gaps, chromosomeName, beg, end):
@@ -329,7 +330,7 @@ def getLocalRearrangements(opts, args, gaps, outgroupRanges):
         if opts.outgroup:
             if not isContained(outgroupRanges, chromosomeName, beg, end):
                 continue
-        printRearrangement(chromosomeName, beg, end, clump)
+        printRearrangement(chromosomeName, beg, end, queryNames)
         alignmentsOfRearrangedQueries.extend(clump)
         queryCounts.append(numOfQueries)
 
