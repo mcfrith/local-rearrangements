@@ -58,22 +58,24 @@ def rearrangementRanges(opts, alignments, reaBegs, reaEnds, strand):
     for j, y in enumerate(alignments):
         if y[3] == strand and reaEnds[j] < reaBegs[j]:
             if x and (i + 1 < j or opts.tandem and x[7] > y[6]):
-                yield reaBegs[i], reaEnds[j]
+                yield i, j
             i = j
             x = y
 
-def onePassMergedRanges(ranges):
+def onePassMergedRanges(ranges, reaBegs, reaEnds):
     oldBeg, oldEnd = ranges[0]
     for beg, end in ranges[1:]:
-        if beg - oldEnd > 2 * (oldEnd - oldBeg + end - beg):  # xxx ?
+        separation = reaBegs[beg] - reaEnds[oldEnd]
+        mergedSpan = reaEnds[end] - reaBegs[oldBeg]
+        if 3 * separation > 2 * mergedSpan:  # XXX too merge-y?
             yield oldBeg, oldEnd
             oldBeg = beg
         oldEnd = end
     yield oldBeg, oldEnd
 
-def allPassMergedRanges(ranges):
+def allPassMergedRanges(ranges, reaBegs, reaEnds):
     while True:
-        newRanges = list(onePassMergedRanges(ranges))
+        newRanges = list(onePassMergedRanges(ranges, reaBegs, reaEnds))
         if len(newRanges) == len(ranges): return ranges
         ranges = newRanges
 
@@ -96,8 +98,8 @@ def rearrangementsFromOneQuery(opts, alignments):
     if not ranges: return
     alignedLength = sum(i[7] - i[6] for i in alignments)  # xxx ???
     if tailEnd - headBeg > 2 * alignedLength: return  # xxx ?
-    for beg, end in allPassMergedRanges(ranges):
-        yield rName, beg, end, alignments
+    for beg, end in allPassMergedRanges(ranges, reaBegs, reaEnds):
+        yield rName, reaBegs[beg], reaEnds[end], alignments
 
 def alignmentsPerQueryFromLines(lines):
     for k, v in itertools.groupby(mafInput(lines), operator.itemgetter(0)):
