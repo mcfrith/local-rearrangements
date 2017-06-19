@@ -67,7 +67,7 @@ def onePassMergedRanges(ranges, reaBegs, reaEnds):
     for beg, end in ranges[1:]:
         separation = reaBegs[beg] - reaEnds[oldEnd]
         mergedSpan = reaEnds[end] - reaBegs[oldBeg]
-        if 3 * separation > 2 * mergedSpan:  # XXX too merge-y?
+        if 2 * separation > mergedSpan:  # ? empirically, this seems good
             yield oldBeg, oldEnd
             oldBeg = beg
         oldEnd = end
