@@ -40,12 +40,20 @@ Then, find rearrangements:
 
 The output begins with lines like this:
 
-    # Rearrangement: chr1 16088760 16089609 read217 read696
-    # Rearrangement: chr4 32069345 32072990 read101 read333 read777
+    # Rearrangement: chr1 16088760 16089609 2 read217 read696
+    # Rearrangement: chr4 32069345 32072990 1 read101 read333 read777
 
-Each line includes the start and end coordinates of a rearranged
-region (in [BED3][] format), followed by names of reads that have a
-local rearrangement in this region.
+Each line has:
+
+* The start and end coordinates of a rearranged region, in [BED3][]
+  format, e.g. `chr1 16088760 16089609`.
+
+* The number of DNA reads that have a "complex" local rearrangement in
+  this region (anything except tandem duplication.  This can be useful
+  to know, because tandem duplications are overwhelmingly common.)
+
+* The names of DNA reads that have a local rearrangement in this
+  region.
 
 [BED3]: https://genome.ucsc.edu/FAQ/FAQformat.html#format1
 
@@ -53,14 +61,14 @@ Next, the output has the alignments of the rearranged reads.
 
 Finally, rearrangement counts are shown on the screen:
 
-    # Rearrangements: 1383
-    # Query sequences:  1   Rearrangements: 1258
-    # Query sequences:  2   Rearrangements: 20
-    # Query sequences:  3   Rearrangements: 13
+    # Rearrangements: 3187
+    # Complex query sequences:  1   Rearrangements: 2471
+    # Complex query sequences:  2   Rearrangements: 146
+    # Complex query sequences:  3   Rearrangements: 113
     ...
 
-This means there are 1383 rearranged regions, of which 1258 have just
-one DNA read, 20 have two DNA reads, etc.
+This means there are 3187 rearranged regions, of which 2471 have one
+DNA read with complex rearrangement, 146 have two, etc.
 
 ## Recommended usage
 
@@ -96,17 +104,18 @@ Rearrangements are likely to be enriched for alignment errors.  So
 it's wise to re-align potentially-rearranged reads more carefully.
 
 First, let's extract all reads, whether rearranged or not, that are
-near rearrangements (so these reads might be rearranged if we align
-them more carefully):
+near rearranged regions (so these reads might be rearranged if we
+align them more carefully):
 
-    local-rearrangements --rearrangements out.maf --min-queries=2 myseq.maf > out2.maf
+    local-rearrangements --rearrangements out.maf --min-complex=2 myseq.maf > out2.maf
 
-Here, we only consider rearrangements with at least two reads
-(`--min-queries=2`).  In some datasets, it seems that: *many* reads
-are rearranged due to (non-alignment) artifacts, and rearrangements
-with at least two (or three) reads are more likely to be real.  By
-omitting numerous artifactual cases, we can afford to re-align more
-slowly-and-sensitively.
+Here, we only consider rearranged regions that have at least two reads
+with "complex" rearrangements (anything except tandem duplications).
+This is because: in some datasets, *many* reads are rearranged due to
+(non-alignment) artifacts; and tandem duplications are overwhelmingly
+common (and sometimes overlap artifactual rearrangements by chance).
+`--min-complex=2` omits a lot of artifactual and boring cases, so we
+can afford to re-align more slowly-and-sensitively.
 
 Next, get the FASTA sequences of these reads:
 
@@ -156,6 +165,10 @@ and confusing.
   then you probably don't need this.  `FILE` should contain gap
   locations in agp or gap.txt format.
 
+- `--min-complex=N`: only consider rearrangements that have >= N query
+  sequences with "complex" rearrangements, i.e. anything except tandem
+  duplications.  (Tandem triplications etc. are considered "complex".)
+
 - `--min-queries=N`: only consider rearrangements with >= N query
   sequences.
 
@@ -168,10 +181,6 @@ and confusing.
 
 - `--rearrangements=FILE`: get alignments of queries near these
   rearrangements.
-
-- `--tandem`: include simple tandem duplications.  These are (mostly)
-  excluded by default, because there are lots of them, overwhelming
-  more interesting cases.
 
 - `-v`, `--verbose`: show progress messages.
 

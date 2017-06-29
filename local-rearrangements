@@ -57,7 +57,7 @@ def rearrangementRanges(opts, alignments, reaBegs, reaEnds, strand):
     x = None
     for j, y in enumerate(alignments):
         if y[3] == strand and reaEnds[j] < reaBegs[j]:
-            if x and (i + 1 < j or opts.tandem and x[7] > y[6]):
+            if x and (i + 1 < j or x[7] > y[6]):
                 yield i, j
             i = j
             x = y
@@ -99,7 +99,11 @@ def rearrangementsFromOneQuery(opts, alignments):
     alignedLength = sum(i[7] - i[6] for i in alignments)  # xxx ???
     if tailEnd - headBeg > 2 * alignedLength: return  # xxx ?
     for beg, end in allPassMergedRanges(ranges, reaBegs, reaEnds):
-        yield rName, reaBegs[beg], reaEnds[end], alignments
+        if beg + 1 < end:
+            event = "C"  # complex
+        else:
+            event = "T"  # tandem duplication
+        yield rName, reaBegs[beg], reaEnds[end], event, alignments
 
 def alignmentsPerQueryFromLines(lines):
     for k, v in itertools.groupby(mafInput(lines), operator.itemgetter(0)):
@@ -205,7 +209,8 @@ def rearrangementRangesFromFile(opts, gaps, outgroupRanges, seqNames, lines):
     for line in lines:
         fields = line.split()
         if not fields: break
-        if len(fields) < 5 + opts.min_queries: continue
+        if len(fields) < 6 + opts.min_queries: continue
+        if int(fields[5]) < opts.min_complex: continue
         chromosomeName = fields[2]
         beg = int(fields[3])
         end = int(fields[4])
@@ -214,7 +219,7 @@ def rearrangementRangesFromFile(opts, gaps, outgroupRanges, seqNames, lines):
             if not isContained(outgroupRanges, chromosomeName, beg, end):
                 continue
         yield chromosomeName, beg, end
-        seqNames.update(fields[5:])
+        seqNames.update(fields[6:])
         sys.stdout.write(line)
 
 def rangeSortKey(r):
@@ -274,21 +279,22 @@ def printMafs(alignments):
         sys.stdout.write("\n")
     sys.stdout.write("\n\n")
 
-def printRearrangement(rName, beg, end, queryNames):
+def printRearrangement(rName, beg, end, numOfComplex, queryNames):
     q = " ".join(sorted(queryNames))
-    out = "# Rearrangement:", rName, str(beg), str(end), q
+    out = "# Rearrangement:", rName, str(beg), str(end), str(numOfComplex), q
     sys.stdout.write(" ".join(out) + "\n")
 
 def rearrangementClumps(rearrangements):
     oldName = ""
-    for chromosomeName, beg, end, alignments in rearrangements:
+    for chromosomeName, beg, end, event, alignments in rearrangements:
         if chromosomeName > oldName or beg >= maxEnd:
             if oldName: yield oldName, minBeg, maxEnd, clump
             clump = []
             oldName = chromosomeName
             minBeg = beg
             maxEnd = end
-        clump.append(alignments)
+        queryInfo = alignments, event
+        clump.append(queryInfo)
         maxEnd = max(maxEnd, end)
     if oldName: yield oldName, minBeg, maxEnd, clump
 
@@ -321,18 +327,26 @@ def getLocalRearrangements(opts, args, gaps, outgroupRanges):
     queryCounts = []
 
     for chromosomeName, beg, end, clump in rearrangementClumps(rearrangements):
-        queryNames = set(i[0][0] for i in clump)
+        alignmentLists = [i[0] for i in clump]
+        allQueryNames = [i[0][0] for i in alignmentLists]
+        queryNames = set(allQueryNames)
         numOfQueries = len(queryNames)
         if numOfQueries < opts.min_queries:
+            continue
+        events = [i[1] for i in clump]
+        namesAndEvents = sorted(zip(allQueryNames, events))
+        g = itertools.groupby(namesAndEvents, operator.itemgetter(0))
+        numOfComplex = sum("".join(i[1] for i in v) != "T" for k, v in g)
+        if numOfComplex < opts.min_complex:
             continue
         if isOverlap(gaps, chromosomeName, beg, end):
             continue
         if opts.outgroup:
             if not isContained(outgroupRanges, chromosomeName, beg, end):
                 continue
-        printRearrangement(chromosomeName, beg, end, queryNames)
-        alignmentsOfRearrangedQueries.extend(clump)
-        queryCounts.append(numOfQueries)
+        printRearrangement(chromosomeName, beg, end, numOfComplex, queryNames)
+        alignmentsOfRearrangedQueries.extend(alignmentLists)
+        queryCounts.append(numOfComplex)
 
     sys.stdout.write("\n")
 
@@ -347,7 +361,8 @@ def getLocalRearrangements(opts, args, gaps, outgroupRanges):
     sys.stderr.write("# Rearrangements: %s\n" % len(queryCounts))
     for k, v in itertools.groupby(sorted(queryCounts)):
         t = k, len(list(v))
-        sys.stderr.write("# Query sequences: %2s   Rearrangements: %s\n" % t)
+        line = "# Complex query sequences: %2s   Rearrangements: %s\n" % t
+        sys.stderr.write(line)
 
 def localRearrangements(opts, args):
     gaps = list(uncontained(readGaps(opts)))
@@ -363,11 +378,14 @@ def localRearrangements(opts, args):
 
 if __name__ == "__main__":
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # avoid silly error message
-    usage = "%prog maf-file(s)"
+    usage = "%prog [options] maf-file(s)"
     descr = "Find sequence rearrangements contained in single query sequences."
     op = optparse.OptionParser(usage=usage, description=descr)
     op.add_option("--gap", metavar="FILE",
                   help="read unsequenced genome gaps from agp or gap file")
+    op.add_option("--min-complex", type="int", default=1, metavar="N",
+                  help='only consider rearrangements with >= N '
+                  '"complex" queries (default=%default)')
     op.add_option("--min-queries", type="int", default=1, metavar="N",
                   help="only consider rearrangements with >= N queries "
                   "(default=%default)")
@@ -381,8 +399,6 @@ if __name__ == "__main__":
     # human-chimp indel >100.
     op.add_option("--rearrangements", metavar="FILE",
                   help="get alignments of queries near these rearrangements")
-    op.add_option("--tandem", action="store_true",
-                  help="include simple tandem duplications")
     op.add_option("-v", "--verbose", action="count",
                   help="show progress messages")
     opts, args = op.parse_args()

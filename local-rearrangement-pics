@@ -117,12 +117,12 @@ else if (NF == 15)
 cat "$bed" >> $tmp.b
 
 awk '
-/^# Rearrangement: / && NF - 5 '"$cond"' {print > "'$tmp.x'"} !/^[#p]/
+/^# Rearrangement: / && NF - 6 '"$cond"' {print > "'$tmp.x'"} !/^[#p]/
 ' "$@" > $tmp.a
 
 touch $tmp.x
 
-cut -d' ' -f3- $tmp.x |
+cut -d' ' -f3-5,7- $tmp.x |
 if test "$sampleSize"
 then
     python -c "
