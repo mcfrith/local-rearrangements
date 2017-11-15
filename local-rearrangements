@@ -2,6 +2,7 @@
 # Copyright 2017 Martin C. Frith
 
 import bisect
+import gzip
 import itertools
 import operator
 import optparse
@@ -11,6 +12,8 @@ import sys
 def myOpen(fileName):  # faster than fileinput
     if fileName == "-":
         return sys.stdin
+    if fileName.endswith(".gz"):
+        return gzip.open(fileName)
     return open(fileName)
 
 def log(opts, *things):

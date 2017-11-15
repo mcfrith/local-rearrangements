@@ -38,7 +38,8 @@ Then, find rearrangements:
 
     local-rearrangements myseq.maf > out.maf
 
-The output begins with lines like this:
+This also works with `myseq.maf.gz`.  The output begins with lines
+like this:
 
     # Rearrangement: chr1 16088760 16089609 2 read217 read696
     # Rearrangement: chr4 32069345 32072990 1 read101 read333 read777
